@@ -1,15 +1,27 @@
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+
+# Build output
 build/
 dist/
 release/
-installer_output/
-setup_builder/installer_output/
 *.spec
-.venv/
-venv/
+
+# Logs / local data
 *.log
-*.pfx
-*.cer
-*.key
-.env
+*.tmp
+
+# Local backups
+.backup_ai_fix_*/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

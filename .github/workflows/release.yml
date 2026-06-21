@@ -1,15 +1,15 @@
-name: Build and Release Driver Handler by CROD
+name: Release
 
 on:
   push:
     tags:
-      - "v*"
+      - "v*.*.*"
   workflow_dispatch:
     inputs:
       version:
-        description: "Version number without v, example: 1.0.1"
-        required: true
-        default: "1.0.1"
+        description: "Version number, example: 1.0.1"
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -25,86 +25,92 @@ jobs:
       - name: Resolve version
         shell: pwsh
         run: |
-          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
-            $version = "${{ github.event.inputs.version }}"
+          if ("${{ github.event_name }}" -eq "workflow_dispatch" -and "${{ inputs.version }}" -ne "") {
+            $version = "${{ inputs.version }}"
+          } elseif ("${{ github.ref_type }}" -eq "tag") {
+            $version = "${{ github.ref_name }}" -replace "^v", ""
+          } elseif (Test-Path version.txt) {
+            $version = (Get-Content version.txt -Raw).Trim()
           } else {
-            $version = "${{ github.ref_name }}".TrimStart("v")
+            $version = "1.0.0"
           }
 
-          "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
-          Set-Content -Path "version.txt" -Value $version -Encoding ASCII
+          Set-Content -Path version.txt -Value $version
+          "APP_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "RELEASE_TAG=v$version" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "Version: $version"
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.11"
 
       - name: Install Python dependencies
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          if (Test-Path requirements.txt) {
-            pip install -r requirements.txt
-          }
-          pip install pyinstaller
+          python -m pip install -r requirements.txt
 
-      - name: Build main app
+      - name: Build core EXE
         shell: pwsh
         run: |
-          python -m PyInstaller --noconfirm --onefile --noconsole 
-            --name "DriverHandlerByCROD" 
-            --add-data "version.txt;." 
-            --hidden-import "wmi" 
-            --hidden-import "win32api" 
-            --hidden-import "win32con" 
-            --hidden-import "pystray" 
-            --hidden-import "PIL" 
+          python -m PyInstaller --noconfirm --onefile --noconsole --clean `
+            --name "DriverHandlerByCROD_Core" `
+            --add-data "version.txt;." `
+            --hidden-import "wmi" `
+            --hidden-import "win32api" `
+            --hidden-import "win32con" `
+            --hidden-import "winreg" `
+            --hidden-import "pystray" `
+            --hidden-import "PIL" `
             main_window.py
 
-      - name: Build launcher
+      - name: Build visible launcher EXE
         shell: pwsh
         run: |
-          python -m PyInstaller --noconfirm --onefile --noconsole 
-            --name "Launcher" 
-            --hidden-import "auto_updater" 
-            --hidden-import "config" 
-            --hidden-import "logger" 
+          python -m PyInstaller --noconfirm --onefile --noconsole --clean `
+            --name "DriverHandlerByCROD" `
+            --add-data "version.txt;." `
+            --hidden-import "auto_updater" `
+            --hidden-import "config" `
+            --hidden-import "logger" `
             launcher.py
 
       - name: Prepare release folder
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path release
-          Copy-Item dist\DriverHandlerByCROD.exe release\
-          Copy-Item dist\Launcher.exe release\
-          Copy-Item version.txt release\
+          New-Item -ItemType Directory -Force -Path release | Out-Null
+          Copy-Item dist\DriverHandlerByCROD_Core.exe release\DriverHandlerByCROD_Core.exe -Force
+          Copy-Item dist\DriverHandlerByCROD.exe release\DriverHandlerByCROD.exe -Force
+          Copy-Item version.txt release\version.txt -Force
 
       - name: Install Inno Setup
         shell: pwsh
-        run: choco install innosetup --yes
+        run: choco install innosetup -y --no-progress
 
       - name: Build installer
         shell: pwsh
         run: |
-          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
-          & $iscc "setup_builder\installer.iss"
+          (Get-Content "setup_builder\installer.iss" -Raw) `
+            -replace '#define MyAppVersion "[^"]+"', "#define MyAppVersion `"$env:APP_VERSION`"" |
+            Set-Content "setup_builder\installer_build.iss" -Encoding UTF8
 
-      - name: Rename installer to stable latest-download filename
-        shell: pwsh
-        run: |
-          $installer = Get-ChildItem "setup_builder\installer_output" -Filter "*.exe" | Select-Object -First 1
-          Copy-Item $installer.FullName "Driver_Handler_By_CROD_Setup.exe" -Force
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "setup_builder\installer_build.iss"
 
-      - name: Create or update GitHub Release
+          if (!(Test-Path "release\Driver_Handler_By_CROD_Setup.exe")) {
+            throw "Installer was not created."
+          }
+
+      - name: Upload release assets
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ env.VERSION }}
-          name: Driver Handler by CROD v${{ env.VERSION }}
-          body: |
-            Driver Handler by CROD v${{ env.VERSION }}
-
-            Download:
-            Driver_Handler_By_CROD_Setup.exe
-          files: Driver_Handler_By_CROD_Setup.exe
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: Driver Handler by CROD ${{ env.APP_VERSION }}
+          generate_release_notes: true
+          files: |
+            release\Driver_Handler_By_CROD_Setup.exe
+            release\DriverHandlerByCROD.exe
+            release\DriverHandlerByCROD_Core.exe
+            release\version.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
