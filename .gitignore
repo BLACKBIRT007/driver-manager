@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+build/
+dist/
+release/
+installer_output/
+setup_builder/installer_output/
+*.spec
+.venv/
+venv/
+*.log
+*.pfx
+*.cer
+*.key
+.env

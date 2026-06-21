@@ -1,73 +1,110 @@
-name: Build & Release
+name: Build and Release Driver Handler by CROD
 
 on:
   push:
     tags:
-      - 'v*'           # triggers on tags like v1.0.0, v1.2.3
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version number without v, example: 1.0.1"
+        required: true
+        default: "1.0.1"
+
+permissions:
+  contents: write
 
 jobs:
   build:
     runs-on: windows-latest
 
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Resolve version
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $version = "${{ github.event.inputs.version }}"
+          } else {
+            $version = "${{ github.ref_name }}".TrimStart("v")
+          }
+
+          "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Set-Content -Path "version.txt" -Value $version -Encoding ASCII
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.12"
 
-      - name: Install dependencies
+      - name: Install Python dependencies
+        shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          if (Test-Path requirements.txt) {
+            pip install -r requirements.txt
+          }
+          pip install pyinstaller
 
-      - name: Write version to file
-        run: |
-          $tag = "${{ github.ref_name }}" -replace '^v', ''
-          Set-Content -Path version.txt -Value $tag
+      - name: Build main app
         shell: pwsh
-
-      - name: Build EXEs with PyInstaller
         run: |
-          pyinstaller --noconfirm --onefile --windowed `
-            --name "DriverManager" `
-            --add-data "version.txt;." `
-            --hidden-import "wmi" `
-            --hidden-import "win32api" `
-            --hidden-import "win32con" `
-            --hidden-import "pystray" `
-            --hidden-import "PIL" `
+          python -m PyInstaller --noconfirm --onefile --noconsole 
+            --name "DriverHandlerByCROD" 
+            --add-data "version.txt;." 
+            --hidden-import "wmi" 
+            --hidden-import "win32api" 
+            --hidden-import "win32con" 
+            --hidden-import "pystray" 
+            --hidden-import "PIL" 
             main_window.py
 
-          pyinstaller --noconfirm --onefile --windowed `
-            --name "Launcher" `
+      - name: Build launcher
+        shell: pwsh
+        run: |
+          python -m PyInstaller --noconfirm --onefile --noconsole 
+            --name "Launcher" 
+            --hidden-import "auto_updater" 
+            --hidden-import "config" 
+            --hidden-import "logger" 
             launcher.py
 
+      - name: Prepare release folder
+        shell: pwsh
+        run: |
           New-Item -ItemType Directory -Force -Path release
-          Copy-Item dist\DriverManager.exe release\
+          Copy-Item dist\DriverHandlerByCROD.exe release\
           Copy-Item dist\Launcher.exe release\
           Copy-Item version.txt release\
-        shell: pwsh
 
       - name: Install Inno Setup
-        run: choco install innosetup -y
         shell: pwsh
+        run: choco install innosetup --yes
 
-      - name: Build Windows installer
+      - name: Build installer
+        shell: pwsh
         run: |
-          $version = Get-Content version.txt
-          (Get-Content setup_builder\installer.iss) `
-            -replace '#define AppVersion "1.0.0"', "#define AppVersion `"$version`"" | `
-            Set-Content setup_builder\installer_versioned.iss
-          iscc setup_builder\installer_versioned.iss
-        shell: pwsh
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          & $iscc "setup_builder\installer.iss"
 
-      - name: Upload installer to GitHub Release
+      - name: Rename installer to stable latest-download filename
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem "setup_builder\installer_output" -Filter "*.exe" | Select-Object -First 1
+          Copy-Item $installer.FullName "Driver_Handler_By_CROD_Setup.exe" -Force
+
+      - name: Create or update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: installer_output/DriverManager_Setup_*.exe
-          generate_release_notes: true
+          tag_name: v${{ env.VERSION }}
+          name: Driver Handler by CROD v${{ env.VERSION }}
+          body: |
+            Driver Handler by CROD v${{ env.VERSION }}
+
+            Download:
+            Driver_Handler_By_CROD_Setup.exe
+          files: Driver_Handler_By_CROD_Setup.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
